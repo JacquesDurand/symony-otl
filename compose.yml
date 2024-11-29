@@ -1,0 +1,162 @@
+services:
+  php:
+    image: ${IMAGES_PREFIX:-}app-php
+    restart: unless-stopped
+    volumes:
+      - php_socket:/var/run/php
+    environment:
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      TRUSTED_HOSTS: ^${SERVER_NAME:-example\.com|localhost}|caddy$$
+      # The two next lines can be removed after initial installation
+      SYMFONY_VERSION: ${SYMFONY_VERSION:-}
+      STABILITY: ${STABILITY:-stable}
+      # Run "composer require symfony/orm-pack" to install and configure Doctrine ORM
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-!ChangeMe!}@database:5432/${POSTGRES_DB:-app}?serverVersion=${POSTGRES_VERSION:-15}&charset=${POSTGRES_CHARSET:-utf8}
+      # Run "composer require symfony/mercure-bundle" to install and configure the Mercure integration
+      MERCURE_URL: ${CADDY_MERCURE_URL:-http://caddy/.well-known/mercure}
+      MERCURE_PUBLIC_URL: https://${SERVER_NAME:-localhost}/.well-known/mercure
+      MERCURE_JWT_SECRET: ${CADDY_MERCURE_JWT_SECRET:-!ChangeThisMercureHubJWTSecretKey!}
+      OTEL_PHP_AUTOLOAD_ENABLED: true
+      OTEL_SERVICE_NAME: symfony_app
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: otlp
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+
+  caddy:
+    image: ${IMAGES_PREFIX:-}app-caddy
+    depends_on:
+      php:
+        condition: service_healthy
+        restart: true
+    environment:
+      SERVER_NAME: ${SERVER_NAME:-localhost}, caddy:80
+      MERCURE_PUBLISHER_JWT_KEY: ${CADDY_MERCURE_JWT_SECRET:-!ChangeThisMercureHubJWTSecretKey!}
+      MERCURE_SUBSCRIBER_JWT_KEY: ${CADDY_MERCURE_JWT_SECRET:-!ChangeThisMercureHubJWTSecretKey!}
+    restart: unless-stopped
+    volumes:
+      - php_socket:/var/run/php
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      # HTTP
+      - target: 80
+        published: ${HTTP_PORT:-80}
+        protocol: tcp
+      # HTTPS
+      - target: 443
+        published: ${HTTPS_PORT:-443}
+        protocol: tcp
+      # HTTP/3
+      - target: 443
+        published: ${HTTP3_PORT:-443}
+        protocol: udp
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.112.0
+    command: [ "--config=/etc/otel-collector-config.yml"]
+    volumes:
+      - ./docker/opentelemetry/otel-collector/otel-collector-config.yml:/etc/otel-collector-config.yml
+    ports:
+      - "4317:4317" # OTLP grpc receiver
+      - "4318:4318" # OTLP http receiver
+
+  loki:
+    image: grafana/loki:3.1.0
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./docker/opentelemetry/loki/loki.yml:/etc/loki/loki.yml
+    ports:
+      - "3100:3100"
+
+  grafana:
+    image: grafana/grafana:11.0.0
+    volumes:
+      - ./docker/opentelemetry/grafana/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+      - ./docker/opentelemetry/grafana/grafana-plugins.yml:/etc/grafana/provisioning/plugins/app.yml
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOIN_FORM=true
+      - GF_FEATURE_TOGGLES_ENABLED=accessControlOnCall,traceqlEditor
+      - GF_INSTALL_PLUGINS=https://storage.googleapis.com/integration-artifacts/grafana-lokiexplore-app/grafana-lokiexplore-app-latest.zip;grafana-lokiexplore-app
+    ports:
+      - "3000:3000"
+
+  tempo-init:
+    image: &tempoImage grafana/tempo:2.6.1
+    user: root
+    entrypoint:
+      - "chown"
+      - "10001:10001"
+      - "/var/tempo"
+    volumes:
+      - ./tempo-data:/var/tempo
+
+  tempo:
+    image: *tempoImage
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ./docker/opentelemetry/tempo/tempo.yml:/etc/tempo.yml
+      - ./tempo-data:/var/tempo
+    ports:
+      - "3200"  #tempo
+      - "4317" #otlp grpc
+      - "4318" #otlp http
+    depends_on:
+      - tempo-init
+
+  prometheus:
+    image: prom/prometheus:v2.53.3
+    command:
+      - --config.file=/etc/prometheus.yml
+      - --web.enable-remote-write-receiver
+      - --enable-feature=exemplar-storage
+      - --enable-feature=native-histograms
+    volumes:
+      - ./docker/opentelemetry/prometheus/prometheus.yml:/etc/prometheus.yml
+    ports:
+      - "9090:9090"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:15672"
+
+  messenger_worker:
+    build:
+      context: .
+      target: php_dev
+    command: ["php", "bin/console", "messenger:consume", "async"]
+    restart: unless-stopped
+    depends_on:
+      - rabbitmq
+    volumes:
+      - ./:/srv/app
+      - ./docker/php/conf.d/app.dev.ini:/usr/local/etc/php/conf.d/app.dev.ini:ro
+      # If you develop on Mac or Windows you can remove the vendor/ directory
+      #  from the bind-mount for better performance by enabling the next line:
+      #- /srv/app/vendor
+    environment:
+      OTEL_PHP_AUTOLOAD_ENABLED: true
+      OTEL_SERVICE_NAME: symfony_worker
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: otlp
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    extra_hosts:
+      # Ensure that host.docker.internal is correctly defined on Linux
+      - host.docker.internal:host-gateway
+
+# Mercure is installed as a Caddy module, prevent the Flex recipe from installing another service
+###> symfony/mercure-bundle ###
+###< symfony/mercure-bundle ###
+
+volumes:
+  php_socket:
+  caddy_data:
+  caddy_config:
+###> symfony/mercure-bundle ###
+###< symfony/mercure-bundle ###
