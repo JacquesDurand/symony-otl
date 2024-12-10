@@ -34,3 +34,16 @@ datasources:
     type: loki
     access: proxy
     url: http://loki:3100
+  - name: Mimir
+    type: prometheus
+    access: proxy
+    orgId: 1
+    url: http://mimir:9009/prometheus
+    version: 1
+    editable: true
+    jsonData:
+      httpHeaderName1: "X-Scope-OrgID"
+      alertmanagerUid: "alertmanager"
+    secureJsonData:
+      httpHeaderValue1: "demo"
+    isDefault: false

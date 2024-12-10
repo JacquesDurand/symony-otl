@@ -20,7 +20,7 @@ class HomePageController extends AbstractController
     #[Route('/')]
     public function homepage(): Response
     {
-        $this->logger->info("[INFO] Log from HomePageController");
+        $this->logger->info("Log from HomePageController");
 
         return $this->render('home.html.twig', [
             'message' => 'Hello world!'

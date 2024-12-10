@@ -7,6 +7,7 @@
         "php": ">=8.2",
         "ext-ctype": "*",
         "ext-iconv": "*",
+        "ext-opentelemetry": "*",
         "nyholm/psr7": "^1.8",
         "open-telemetry/exporter-otlp": "^1.1",
         "open-telemetry/opentelemetry-auto-symfony": "1.0.0beta30",
@@ -74,5 +75,9 @@
             "allow-contrib": false,
             "require": "7.1.*"
         }
+    },
+    "require-dev": {
+        "symfony/stopwatch": "7.1.*",
+        "symfony/web-profiler-bundle": "7.1.*"
     }
 }

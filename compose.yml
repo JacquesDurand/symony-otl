@@ -19,7 +19,7 @@ services:
       OTEL_PHP_AUTOLOAD_ENABLED: true
       OTEL_SERVICE_NAME: symfony_app
       OTEL_TRACES_EXPORTER: otlp
-      OTEL_METRICS_EXPORTER: none
+      OTEL_METRICS_EXPORTER: otlp
       OTEL_LOGS_EXPORTER: otlp
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
@@ -142,13 +142,23 @@ services:
       OTEL_PHP_AUTOLOAD_ENABLED: true
       OTEL_SERVICE_NAME: symfony_worker
       OTEL_TRACES_EXPORTER: otlp
-      OTEL_METRICS_EXPORTER: none
+      OTEL_METRICS_EXPORTER: otlp
       OTEL_LOGS_EXPORTER: otlp
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     extra_hosts:
       # Ensure that host.docker.internal is correctly defined on Linux
       - host.docker.internal:host-gateway
+
+  mimir:
+    image: grafana/mimir:2.9.0
+    volumes:
+      - ./docker/opentelemetry/mimir/mimir.yml:/etc/mimir-config/mimir.yml
+    entrypoint:
+      - /bin/mimir
+      - -config.file=/etc/mimir-config/mimir.yml
+    ports:
+      - "9009:9009"
 
 # Mercure is installed as a Caddy module, prevent the Flex recipe from installing another service
 ###> symfony/mercure-bundle ###
